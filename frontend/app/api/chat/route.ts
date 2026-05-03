@@ -1,22 +1,11 @@
-/**
- * app/api/chat/route.ts — NutriBot RAG pipeline (Vercel serverless)
- *
- *  1. Embed query  → @huggingface/inference (all-MiniLM-L6-v2, FREE)
- *  2. Retrieve     → Supabase pgvector (match_chunks RPC)
- *  3. Generate     → Groq via OpenAI-compatible SDK (llama-3.1-8b-instant, FREE)
- */
-
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
-import { HfInference } from "@huggingface/inference";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// ── Clients (one per cold start) ──────────────────────────────────────────────
-const hf = new HfInference(process.env.HF_TOKEN ?? "");
-
+// ── Clients ───────────────────────────────────────────────────────────────────
 const groq = new OpenAI({
   apiKey: process.env.GROQ_API_KEY ?? "",
   baseURL: "https://api.groq.com/openai/v1",
@@ -30,34 +19,45 @@ const supabase = createClient(
 
 const GROQ_MODEL = process.env.GROQ_MODEL ?? "llama-3.1-8b-instant";
 const TOP_K      = parseInt(process.env.TOP_K ?? "5", 10);
-const EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2";
+const HF_TOKEN   = process.env.HF_TOKEN ?? "";
 
-// ── Step 1: Embed via official HF package (no raw URL needed) ─────────────────
+// HF Inference Providers router — the stable 2025 endpoint
+const HF_EMBED_URL =
+  "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction";
+
+// ── Step 1: Embed via HF Inference Providers (direct fetch) ───────────────────
 async function embedQuery(query: string): Promise<number[]> {
-  const result = await hf.featureExtraction({
-    model: EMBED_MODEL,
-    inputs: query,
+  if (!HF_TOKEN) {
+    throw new Error(
+      "HF_TOKEN is not set. Add it in Vercel dashboard → Settings → Environment Variables."
+    );
+  }
+
+  const res = await fetch(HF_EMBED_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${HF_TOKEN}`,
+      "Content-Type": "application/json",
+      "X-Wait-For-Model": "true",
+    },
+    body: JSON.stringify({ inputs: query }),
   });
 
-  // result is Float64Array | Float64Array[] | number[] | number[][]
-  // For a single string input, sentence-transformers returns number[]
-  if (Array.isArray(result)) {
-    // Flat array of numbers → direct embedding
-    if (typeof result[0] === "number") return result as number[];
-    // Nested array (batch of 1) → unwrap
-    if (Array.isArray(result[0])) {
-      const inner = result[0];
-      if (typeof inner[0] === "number") return inner as number[];
-    }
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`HF embedding API ${res.status}: ${err.slice(0, 200)}`);
   }
 
-  // Handle TypedArray (Float64Array)
-  if (result instanceof Float64Array || result instanceof Float32Array) {
-    return Array.from(result);
-  }
+  const data = await res.json();
 
-  throw new Error(`Unexpected embedding shape: ${typeof result}`);
+  // Shape: number[]  (flat 384-dim vector)
+  if (Array.isArray(data) && typeof data[0] === "number") return data as number[];
+  // Shape: number[][] (batch of 1)
+  if (Array.isArray(data) && Array.isArray(data[0])) return data[0] as number[];
+
+  throw new Error(`Unexpected embedding response shape: ${JSON.stringify(data).slice(0, 100)}`);
 }
+
 
 // ── Step 2: Retrieve from Supabase pgvector ───────────────────────────────────
 interface SupabaseChunk {
