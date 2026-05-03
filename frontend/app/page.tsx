@@ -219,13 +219,11 @@ export default function Home() {
         <p className="sidebar-tagline">AI-powered nutrition advisor</p>
 
         <div className="sidebar-section">
-          <p className="sidebar-label">Powered by</p>
-          <div className="tech-pills">
-            <span className="pill pill--green">HuggingFace API</span>
-            <span className="pill pill--blue">Supabase pgvector</span>
-            <span className="pill pill--purple">Groq Llama 3.1</span>
-            <span className="pill pill--orange">RAG Pipeline</span>
-          </div>
+          <p className="sidebar-credit">
+            Made with ❤️ by<br />
+            <span className="credit-name">SHIVA (Darling)</span><br />
+            <span className="credit-country">🇮🇳 from India</span>
+          </p>
         </div>
 
         <div className="sidebar-section">

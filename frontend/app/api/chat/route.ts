@@ -1,25 +1,25 @@
 /**
- * app/api/chat/route.ts — Self-contained NutriBot RAG endpoint.
+ * app/api/chat/route.ts — NutriBot RAG pipeline (Vercel serverless)
  *
- * Full pipeline inside a single Vercel serverless function (no Python backend needed):
- *  1. Embed query  → HuggingFace Inference API (all-MiniLM-L6-v2, FREE)
+ *  1. Embed query  → @huggingface/inference (all-MiniLM-L6-v2, FREE)
  *  2. Retrieve     → Supabase pgvector (match_chunks RPC)
- *  3. Generate     → Groq API via OpenAI-compatible SDK (llama-3.1-8b-instant, FREE)
- *
- * Deploy to Vercel free tier — set env vars in Vercel dashboard.
+ *  3. Generate     → Groq via OpenAI-compatible SDK (llama-3.1-8b-instant, FREE)
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
+import { HfInference } from "@huggingface/inference";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// ── Clients ───────────────────────────────────────────────────────────────────
+// ── Clients (one per cold start) ──────────────────────────────────────────────
+const hf = new HfInference(process.env.HF_TOKEN ?? "");
+
 const groq = new OpenAI({
   apiKey: process.env.GROQ_API_KEY ?? "",
-  baseURL: "https://api.groq.com/openai/v1",  // Groq is OpenAI-compatible ✅
+  baseURL: "https://api.groq.com/openai/v1",
 });
 
 const supabase = createClient(
@@ -28,37 +28,35 @@ const supabase = createClient(
   { auth: { persistSession: false, autoRefreshToken: false } }
 );
 
-const GROQ_MODEL   = process.env.GROQ_MODEL ?? "llama-3.1-8b-instant";
-const HF_TOKEN     = process.env.HF_TOKEN   ?? "";
-const TOP_K        = parseInt(process.env.TOP_K ?? "5", 10);
-const HF_EMBED_URL =
-  "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2";
+const GROQ_MODEL = process.env.GROQ_MODEL ?? "llama-3.1-8b-instant";
+const TOP_K      = parseInt(process.env.TOP_K ?? "5", 10);
+const EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2";
 
-// ── Step 1: Embed via HuggingFace Inference API ───────────────────────────────
+// ── Step 1: Embed via official HF package (no raw URL needed) ─────────────────
 async function embedQuery(query: string): Promise<number[]> {
-  const res = await fetch(HF_EMBED_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${HF_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      inputs: query,
-      options: { wait_for_model: true },
-    }),
+  const result = await hf.featureExtraction({
+    model: EMBED_MODEL,
+    inputs: query,
   });
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`HF Embedding API ${res.status}: ${err}`);
+  // result is Float64Array | Float64Array[] | number[] | number[][]
+  // For a single string input, sentence-transformers returns number[]
+  if (Array.isArray(result)) {
+    // Flat array of numbers → direct embedding
+    if (typeof result[0] === "number") return result as number[];
+    // Nested array (batch of 1) → unwrap
+    if (Array.isArray(result[0])) {
+      const inner = result[0];
+      if (typeof inner[0] === "number") return inner as number[];
+    }
   }
 
-  const data = await res.json();
+  // Handle TypedArray (Float64Array)
+  if (result instanceof Float64Array || result instanceof Float32Array) {
+    return Array.from(result);
+  }
 
-  // HF returns [[...384 floats]] for sentence-transformers
-  if (Array.isArray(data) && Array.isArray(data[0])) return data[0] as number[];
-  if (Array.isArray(data) && typeof data[0] === "number") return data as number[];
-  throw new Error("Unexpected HF embedding response shape");
+  throw new Error(`Unexpected embedding shape: ${typeof result}`);
 }
 
 // ── Step 2: Retrieve from Supabase pgvector ───────────────────────────────────
@@ -154,8 +152,8 @@ export async function POST(req: NextRequest) {
     if (!chunks.length) {
       return NextResponse.json({
         answer:
-          "I couldn't find relevant information in the knowledge base for that question. " +
-          "Try rephrasing, or ask about macronutrients, vitamins, diet plans, or specific foods.",
+          "I couldn't find relevant information for that question. " +
+          "Try asking about macronutrients, vitamins, diet plans, or specific foods.",
         sources: [],
         model: GROQ_MODEL,
       });
