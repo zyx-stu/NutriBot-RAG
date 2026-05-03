@@ -397,7 +397,8 @@ MIT © 2025 — Free to use, modify, and distribute.
 
 <div align="center">
 
-Built with ❤️ using Next.js · Supabase · Groq · HuggingFace
+Built with  using Next.js · Supabase · Groq · HuggingFace
+with ❤️ SHIVA (Darling)
 
 **[⭐ Star this repo](https://github.com/YOUR_USERNAME/NutriBot-RAG)** if you found it useful!
 
