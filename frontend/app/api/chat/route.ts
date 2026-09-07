@@ -17,7 +17,7 @@ const supabase = createClient(
   { auth: { persistSession: false, autoRefreshToken: false } }
 );
 
-const GROQ_MODEL = process.env.GROQ_MODEL ?? "llama-3.1-8b-instant";
+const GROQ_MODEL = process.env.GROQ_MODEL ?? "meta-llama/llama-4-scout-17b-16e-instruct";
 const TOP_K      = parseInt(process.env.TOP_K ?? "5", 10);
 const HF_TOKEN   = process.env.HF_TOKEN ?? "";
 
